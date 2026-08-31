@@ -1,0 +1,5 @@
+/__pycache__
+/data
+**/__pycache__/
+*.py[cod]
+g1_piano_teaching/logs/*

@@ -19,24 +19,36 @@ class RawSampleQueue:
     def __init__(self, maxsize=20000):
         self.samples = queue.Queue(maxsize=maxsize)
         self.dropped = 0
+        self.received = 0
+        self.queued = 0
+        self.extraction_errors = 0
         self.lock = threading.Lock()
 
     def callback(self, msg):
         # Keep the DDS callback limited to timestamping, copying, and enqueueing.
-        sample = (
-            time.monotonic(), time.time(),
-            tuple(float(msg.motor_state[i].q) for i in range(29)),
-            tuple(float(msg.motor_state[i].dq) for i in range(29)),
-            tuple(float(msg.motor_state[i].tau_est) for i in range(29)),
-            tuple(tuple(int(v) for v in msg.motor_state[i].temperature) for i in range(29)),
-            int(msg.mode_machine), tuple(float(v) for v in msg.imu_state.quaternion),
-            tuple(float(v) for v in msg.imu_state.gyroscope),
-            tuple(float(v) for v in msg.imu_state.accelerometer),
-            tuple(float(v) for v in msg.imu_state.rpy),
-            int(msg.imu_state.temperature), int(msg.tick), int(msg.mode_pr),
-        )
+        with self.lock:
+            self.received += 1
+        try:
+            sample = (
+                time.monotonic(), time.time(),
+                tuple(float(msg.motor_state[i].q) for i in range(29)),
+                tuple(float(msg.motor_state[i].dq) for i in range(29)),
+                tuple(float(msg.motor_state[i].tau_est) for i in range(29)),
+                tuple(tuple(int(v) for v in msg.motor_state[i].temperature) for i in range(29)),
+                int(msg.mode_machine), tuple(float(v) for v in msg.imu_state.quaternion),
+                tuple(float(v) for v in msg.imu_state.gyroscope),
+                tuple(float(v) for v in msg.imu_state.accelerometer),
+                tuple(float(v) for v in msg.imu_state.rpy),
+                int(msg.imu_state.temperature), int(msg.tick), int(msg.mode_pr),
+            )
+        except Exception:
+            with self.lock:
+                self.extraction_errors += 1
+            return
         try:
             self.samples.put_nowait(sample)
+            with self.lock:
+                self.queued += 1
         except queue.Full:
             with self.lock:
                 self.dropped += 1
@@ -44,6 +56,10 @@ class RawSampleQueue:
     def dropped_count(self):
         with self.lock:
             return self.dropped
+
+    def counts(self):
+        with self.lock:
+            return self.received, self.queued, self.dropped, self.extraction_errors
 
 
 def metadata(interface):
@@ -78,7 +94,16 @@ def assemble(samples):
     }
 
 
-def print_report(data, output, dropped):
+def save_recording(output, data):
+    if len(data["timestamp_monotonic"]) == 0:
+        raise RuntimeError("recording contained no samples; NPZ was not written")
+    try:
+        np.savez_compressed(output, **data)
+    except OSError as exc:
+        raise RuntimeError(f"failed to write NPZ {output}: {exc}") from exc
+
+
+def print_report(data, output, counts):
     ts = data["timestamp_monotonic"]
     dt = np.diff(ts)
     duration = float(ts[-1] - ts[0]) if len(ts) > 1 else 0.0
@@ -96,7 +121,9 @@ def print_report(data, output, dropped):
     print(f"tick first: {int(data['tick'][0]) if len(ts) else 'N/A'}")
     print(f"tick last: {int(data['tick'][-1]) if len(ts) else 'N/A'}")
     print(f"tick non-monotonic count: {int(np.count_nonzero(np.diff(data['tick'].astype(np.int64)) < 0))}")
-    print(f"DDS callback dropped samples: {dropped}")
+    received, queued, dropped, extraction_errors = counts
+    print(f"DDS callback received/queued/written/dropped/extraction_errors: {received}/{queued}/{len(ts)}/{dropped}/{extraction_errors}")
+    print(f"sample count closure: {received == queued + dropped + extraction_errors and queued == len(ts)}")
     if len(dt):
         p = np.percentile(dt, [0, 50, 95, 99, 100])
         print("dt min/mean/median/p95/p99/max: "
@@ -117,6 +144,8 @@ def main():
     args = parser.parse_args()
     if args.duration <= 0:
         parser.error("--duration must be positive")
+    if args.queue_size <= 0:
+        parser.error("--queue-size must be positive")
 
     if os.path.exists(args.output) and not args.overwrite:
         parser.error(f"output already exists: {args.output}; use --overwrite to replace it")
@@ -137,6 +166,8 @@ def main():
                 pass
     except KeyboardInterrupt:
         print("Interrupted; saving samples collected so far.")
+    finally:
+        subscriber.Close()
     while True:
         try:
             drained.append(samples.samples.get_nowait())
@@ -145,11 +176,8 @@ def main():
 
     data = assemble(drained)
     data["metadata"] = np.asarray(json.dumps(metadata(args.interface), sort_keys=True))
-    try:
-        np.savez_compressed(args.output, **data)
-    except OSError as exc:
-        raise RuntimeError(f"failed to write NPZ {args.output}: {exc}") from exc
-    print_report(data, args.output, samples.dropped_count())
+    save_recording(args.output, data)
+    print_report(data, args.output, samples.counts())
 
 
 if __name__ == "__main__":

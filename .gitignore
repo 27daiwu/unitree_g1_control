@@ -1,5 +1,8 @@
-/__pycache__
-/data
+__pycache__/
 **/__pycache__/
 *.py[cod]
-g1_piano_teaching/logs/*
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+logs/*

@@ -8,12 +8,22 @@
 
 ## 入口
 
+Install the project from the repository root:
+
 ```bash
-export PYTHONPATH=$PWD/src
+cd /home/hebe/unitree_g1_control
+python3 -m pip install -e .
+```
+
+Then run:
+
+```bash
 python3 scripts/run_state_monitor.py --interface eth0
-python3 scripts/record_state.py --interface eth0 --duration 10 --output data/raw/g1_test_002.npz
-python3 scripts/verify_recording.py data/raw/g1_test_002.npz
-python3 -m g1_piano.analysis.audit_recording_quality data/raw/g1_test_002.npz
+python3 scripts/record_state.py --interface eth0 --duration 10 --output data/raw/example.npz
+python3 scripts/verify_recording.py data/raw/example.npz
+python3 -m g1_piano.analysis.audit_recording_quality data/raw/example.npz
 ```
 
 当前状态：State Monitor PASS，Recorder PASS，Replay 尚未开始。
+
+Known issue: Matplotlib visualization currently unavailable due to local NumPy ABI mismatch.

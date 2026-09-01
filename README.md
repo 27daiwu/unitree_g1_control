@@ -1,29 +1,53 @@
-# Unitree G1 29DoF 坐姿弹钢琴示教系统
+# Unitree G1 Piano Teaching
 
-技术路线为 Python + `unitree_sdk2py`。当前阶段只做 Subscriber、原始状态录制和离线分析；不使用 RL，不做 imitation、Replay 或运动控制。
+基于 Python 和 `unitree_sdk2py` 的 Unitree G1 29DoF 坐姿手臂示教、数据录制与 MuJoCo 离线回放工具。
 
-机器人网络：PC1 `192.168.123.161`，PC2/NX `192.168.123.164`，开发端 `192.168.123.222`，接口 `eth0`。
+## 当前功能
 
-已确认：`rt/lowstate`、29DoF joint mapping、`MotorState.temperature` 为原始 `int16[2]`。BMS/MainBoard topic 仍为 UNKNOWN，禁止猜测。
+- G1 29DoF `LowState` 状态监控
+- 29DoF DDS 原始状态录制为 NPZ
+- 双臂 14DoF 无损提取
+- NPZ 数据验证和质量检查
+- MuJoCo 离线动作回放
 
-## 入口
+## 环境
 
-Install the project from the repository root:
+需要 Python 3.10，以及 `unitree_sdk2py`、`numpy`、`mujoco`。从仓库根目录运行时设置：
 
 ```bash
-cd /home/hebe/unitree_g1_control
-python3 -m pip install -e .
+export PYTHONPATH=$PWD/src
 ```
 
-Then run:
+## 项目结构
+
+```text
+src/g1_piano/       核心 Python 模块
+scripts/             用户直接运行的命令行入口
+assets/              MuJoCo G1 模型资源
+data/raw/            原始 29DoF 录制
+data/processed/      离线处理结果
+tests/               单元测试
+docs/                审计和开发文档
+archive/             历史参考工具
+```
+
+## 常用命令
 
 ```bash
+cd /home/hebe/zjy_ws/src/unitree_g1_control
+export PYTHONPATH=$PWD/src
 python3 scripts/run_state_monitor.py --interface eth0
-python3 scripts/record_state.py --interface eth0 --duration 10 --output data/raw/example.npz
-python3 scripts/verify_recording.py data/raw/example.npz
-python3 -m g1_piano.analysis.audit_recording_quality data/raw/example.npz
+python3 scripts/record_state.py --interface eth0 --duration 20 --output data/raw/g1_demo_001.npz
+python3 scripts/verify_recording.py data/raw/g1_demo_001.npz
+python3 scripts/extract_arm_motion.py data/raw/g1_demo_001.npz --output data/processed/g1_demo_001_arms.npz
+python3 scripts/play_npz_mujoco.py data/raw/g1_demo_001.npz --model assets/robots/unitree_g1/xmls/scene_g1.xml
 ```
 
-当前状态：State Monitor PASS，Recorder PASS，Replay 尚未开始。
+## 安全说明
 
-Known issue: Matplotlib visualization currently unavailable due to local NumPy ABI mismatch.
+当前播放器仅执行 NPZ 到 MuJoCo 的离线回放；真实机器人 Replay 和电机控制尚未开放。
+
+## Known Issues
+
+- editable install 可能受系统 Python 权限限制，推荐使用 `PYTHONPATH=$PWD/src`。
+- Matplotlib 在部分本机环境存在 NumPy ABI 问题，不影响 MuJoCo 播放器。

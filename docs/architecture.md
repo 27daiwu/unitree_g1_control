@@ -1,10 +1,15 @@
 # Architecture
 
 ```text
-rt/lowstate -> DDS Subscriber -> complete 29DoF raw state
-             -> bounded queue -> 29DoF NPZ recording
-             -> lossless Arm Extractor -> 14DoF Arm NPZ
-             -> Arm Verifier / Audit / Plot
+rt/lowstate
+    ↓
+29DoF Raw Recorder
+    ↓
+Raw NPZ
+    ├── Arm Extractor → 14DoF Arm NPZ
+    └── MuJoCo Simulator → Offline Playback
 ```
 
-DDS callback 只做 monotonic/wall timestamp、字段复制和非阻塞入队。文件写入、统计和异常处理在主线程完成。未来可从 29DoF 原始数据选择双臂 14DoF，再做关键帧和轨迹研究；本阶段不实现这些步骤。
+DDS 回调只负责采集时间戳、复制字段并非阻塞入队；文件写入、统计和异常处理在主线程完成。原始 NPZ 是后续离线处理的唯一数据源，双臂提取保持对应关节数据无损。
+
+后续将增加关键帧、轨迹编辑和安全约束后的真实机器人 Replay。

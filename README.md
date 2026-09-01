@@ -12,10 +12,21 @@
 
 ## 环境
 
-需要 Python 3.10，以及 `unitree_sdk2py`、`numpy`、`mujoco`。从仓库根目录运行时设置：
+需要 Python 3.10，以及 `unitree_sdk2py`、`numpy`、`mujoco`。
+
+首次进入仓库后，只需执行一次 editable install：
 
 ```bash
-export PYTHONPATH=$PWD/src
+cd /home/hebe/zjy_ws/src/unitree_g1_control
+python3 -m pip install -e . --no-deps
+```
+
+安装完成后无需再设置 `PYTHONPATH`，后续可以直接运行 `scripts/` 下的命令。
+
+如果当前 Python 环境没有系统级安装权限，可使用：
+
+```bash
+python3 -m pip install --user -e . --no-deps
 ```
 
 ## 项目结构
@@ -35,7 +46,6 @@ archive/             历史参考工具
 
 ```bash
 cd /home/hebe/zjy_ws/src/unitree_g1_control
-export PYTHONPATH=$PWD/src
 python3 scripts/run_state_monitor.py --interface eth0
 python3 scripts/record_state.py --interface eth0 --duration 20 --output data/raw/g1_demo_001.npz
 python3 scripts/verify_recording.py data/raw/g1_demo_001.npz
@@ -49,5 +59,5 @@ python3 scripts/play_npz_mujoco.py data/raw/g1_demo_001.npz --model assets/robot
 
 ## Known Issues
 
-- editable install 可能受系统 Python 权限限制，推荐使用 `PYTHONPATH=$PWD/src`。
+- 如果切换了 Python/Conda/venv 环境，需要在新环境中重新执行一次 `python3 -m pip install -e . --no-deps`。
 - Matplotlib 在部分本机环境存在 NumPy ABI 问题，不影响 MuJoCo 播放器。

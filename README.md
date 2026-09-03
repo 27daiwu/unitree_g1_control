@@ -20,10 +20,23 @@ conda activate g1_control
 ```
 
 然后请用户自行按照 Unitree SDK 的安装说明，在该环境中安装 `unitree_sdk2py`（及其 CycloneDDS 依赖），并确保 `numpy`、`mujoco` 已安装。最后在工程根目录执行一次 editable install：
+需要 Python 3.10，以及 `unitree_sdk2py`、`numpy`、`mujoco`。
+
+首次进入仓库后，只需执行一次 editable install：
+
+```bash
+cd /home/hebe/zjy_ws/src/unitree_g1_control
+python3 -m pip install -e . --no-deps
+```
+
+安装完成后无需再设置 `PYTHONPATH`，后续可以直接运行 `scripts/` 下的命令。
+
+如果当前 Python 环境没有系统级安装权限，可使用：
 
 ```bash
 cd ~/zjy_ws/src/unitree_g1_control
 python3 -m pip install -e . --no-deps
+python3 -m pip install --user -e . --no-deps
 ```
 
 `unitree_sdk2py` 与 CycloneDDS 必须安装在同一个 Conda 环境中。首次进入该环境后执行一次 editable install，之后可以直接运行 `scripts/` 下的程序，不需要设置 `PYTHONPATH`。如果切换 Conda、venv 或 Python 环境，请在新环境重新执行一次 editable install。
@@ -111,5 +124,6 @@ python3 scripts/extract_arm_motion.py \
 
 ## Known Issues
 
+- editable install 可能受系统 Python 权限限制，推荐使用 `PYTHONPATH=$PWD/src`。
 - Matplotlib 在部分本机环境存在 NumPy ABI 问题，不影响 MuJoCo 播放器。
 - 不建议直接使用当前系统 Python 3.13，因为已有 CycloneDDS 二进制可能存在 ABI 不兼容。

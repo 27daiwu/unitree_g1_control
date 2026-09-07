@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "robot": "Unitree G1 29DoF",
+  "mapping_status": "CONFIRMED_FROM_LOCAL_SDK_AUDIT",
+  "tests": [],
+  "notes": "No physical motor has been marked verified. Add one record only after a supervised test.",
+  "lowcmd_policy": "complete_frame; selected_slot_test; other_slots_explicit_measured_q_hold"
+}

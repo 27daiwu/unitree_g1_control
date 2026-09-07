@@ -9,6 +9,7 @@
 - 双臂 14DoF 无损提取
 - NPZ 数据验证和质量检查
 - MuJoCo 离线动作回放
+- 单电机低层控制诊断（默认只读，需显式确认）
 
 ## 环境
 
@@ -61,6 +62,32 @@ archive/             历史参考工具
 ```bash
 conda activate g1_control
 cd ~/zjy_ws/src/unitree_g1_control
+```
+
+### 0. 29DoF 电机诊断（阶段 A）
+
+默认只订阅并打印全部 29 个电机，不会发送命令：
+
+```bash
+PYTHONPATH=src python3 scripts/test_motor_control.py --interface enp130s0 --dry-run
+```
+
+指定一个电机或关节名后，程序仍会先显示实时状态，并要求输入 `YES` 才会执行 `0.01 rad` 的平滑往返测试：
+
+```bash
+PYTHONPATH=src python3 scripts/test_motor_control.py \
+    --interface enp130s0 --joint left_wrist_yaw
+```
+
+`rt/lowcmd` 是完整帧接口；控制期间工具显式填充全部 35 个命令槽，目标槽位执行测试，其余 G1 槽位使用最新实测 `q` 和零增益保持。该策略不等同于“不接管”，实机测试前必须确认目标固件的控制权和模式语义。详见 `docs/MOTOR_CONTROL_AUDIT.md`。
+
+当前默认 backend 为 `userctrl`，使用 `rt/user_lowcmd`，并要求 `GetFsmId()` 返回 `1 / PASSIVE` 后才允许 ownership handoff。退出默认调用 `SwitchToInternalCtrl(PASSIVE)`；`legacy_lowcmd` 和 `--exit-mode last` 都必须显式指定。详见 `docs/USERCTRL_OWNERSHIP_AUDIT.md`。
+
+纯 ownership 验证（不执行任何位置偏移）：
+
+```bash
+PYTHONPATH=src python3 scripts/test_motor_control.py \
+    --interface enp130s0 --ownership-only --ownership-duration 2
 ```
 
 ### 1. 录制 G1 状态

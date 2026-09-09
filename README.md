@@ -119,16 +119,22 @@ python3 scripts/verify_recording.py \
 
 录制内容包括 29DoF 的 `q`、`dq`、`tau_est`、motor temperature，以及 IMU、`mode_machine`、`tick` 和时间戳。看到 `validation: PASS` 表示 NPZ 结构和基本完整性检查通过。
 
-### 3. 左臂示教录制与真机回放
+### 3. 双臂示教录制与真机回放
 
 ```bash
-python3 scripts/record_left_arm_teach.py --interface eth0
+python3 scripts/record_left_arm_teach.py --interface eth0 --arm left
+# TEACH/record also support --arm right and --arm both
 python3 scripts/playback_left_arm.py \
     --input data/teach/raw/20260908_left_arm_take001.npz \
-    --interface eth0
+    --interface eth0 --arm left
+
+# 只做 NPZ 离线验证，不连接 DDS 或进入 UserCtrl
+python3 scripts/playback_left_arm.py \
+    --input data/teach/raw/right_arm_take001.npz \
+    --validate-only --recorded-dq-limit 2.0
 ```
 
-示教录制采用 UserCtrl、低刚度 `q_target` follower 和 Pinocchio 重力补偿。真机回放按 `MOVE_TO_START -> SETTLE -> PLAYBACK -> HOLD_FINAL -> PASSIVE` 生命周期执行。命令参数和安全确认以脚本 `--help` 及现场操作规程为准。
+示教录制与真机回放支持 `--arm left|right|both`；回放未指定 `--arm` 时使用 NPZ 内部 `arm_mode`，显式参数与文件 metadata 不一致则在 UserCtrl 前拒绝。示教录制采用 UserCtrl、低刚度 `q_target` follower 和 Pinocchio 重力补偿。真机回放按 `MOVE_TO_START -> SETTLE -> PLAYBACK -> HOLD_FINAL -> PASSIVE` 生命周期执行。命令参数和安全确认以脚本 `--help` 及现场操作规程为准。
 
 ### 4. MuJoCo 离线播放
 

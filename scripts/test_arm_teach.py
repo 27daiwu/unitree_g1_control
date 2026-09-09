@@ -19,6 +19,7 @@ from test_motor_control import (
     create_lowcmd, fsm_name, make_ownership_command, set_field,
 )
 from g1_piano.common.joint_map import G1_29DOF_JOINT_NAMES, JOINT_TO_INDEX
+from g1_piano.common.arm_spec import get_arm_spec
 
 try:
     import pinocchio as pin
@@ -126,7 +127,7 @@ def full_state(msg):
     return q, dq, tau
 
 
-def make_arm_command(msg, targets, tau_ff):
+def make_arm_command(msg, targets, tau_ff, config_map=None):
     cmd = create_lowcmd()
     slots = getattr(cmd, "motor_cmd", getattr(cmd, "motorCmd", []))
     if callable(slots): slots = slots()
@@ -135,8 +136,8 @@ def make_arm_command(msg, targets, tau_ff):
         for field, value in (("q", q), ("dq", 0.0), ("tau", 0.0),
                              ("kp", 0.0), ("kd", 0.0), ("mode", 0)):
             set_field(slots[i], field, value)
-    for index in LEFT_ARM_INDICES:
-        config = JOINT_CONFIG[G1_29DOF_JOINT_NAMES[index]]
+    for index in targets:
+        config = (config_map or JOINT_CONFIG).get(G1_29DOF_JOINT_NAMES[index], {"kp": 0.0, "kd": STOP_DAMPING_KD})
         set_field(slots[index], "q", float(targets[index]))
         set_field(slots[index], "dq", 0.0)
         set_field(slots[index], "kp", float(config["kp"]))
@@ -170,6 +171,7 @@ def main():
     root = Path(__file__).resolve().parents[1]
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--interface", default="eth0")
+    ap.add_argument("--arm", choices=("left", "right", "both"), default="left")
     ap.add_argument("--follow-rate", type=float, default=0.25)
     ap.add_argument("--follow-threshold", type=float, default=0.015)
     ap.add_argument("--wrist-kp", type=float, choices=(4.0, 6.0), default=6.0,
@@ -190,12 +192,18 @@ def main():
     if min(args.follow_rate, args.follow_threshold, args.rate,
            args.timeout, args.gravity_tau_limit) <= 0:
         ap.error("control and safety parameters must be positive")
-    for wrist_name in ("left_wrist_roll", "left_wrist_pitch", "left_wrist_yaw"):
-        JOINT_CONFIG[wrist_name]["kp"] = args.wrist_kp
+    spec = get_arm_spec(args.arm)
+    # Keep exported left-arm baseline constants untouched for playback imports.
+    selected_indices = spec.motor_indices
+    selected_names = spec.joint_names
+    selected_config = spec.config()
+    for name in selected_names:
+        if name.endswith(("wrist_roll", "wrist_pitch", "wrist_yaw")):
+            selected_config[name] = {**selected_config[name], "kp": args.wrist_kp}
 
     logger = TestLogger(args, "left_arm_multi_joint_teach")
     print(f"LOG_FILE={logger.log_path}")
-    logger.info("CONTROL_SCOPE=LEFT_ARM_ONLY MOTOR_INDICES=15..21")
+    logger.info(f"CONTROL_SCOPE={args.arm.upper()}_ARM MOTOR_INDICES={list(selected_indices)}")
     logger.info("GRAVITY_BACKEND=PINOCCHIO_URDF GRAVITY_REFERENCE_BACKEND=MUJOCO BASE_ORIENTATION_ASSUMED_LEVEL=YES")
     try:
         gravity = PinocchioGravity(args.gravity_urdf)
@@ -207,8 +215,8 @@ def main():
     ChannelFactoryInitialize(0, args.interface)
     sub = ChannelSubscriber("rt/lowstate", LowState_); sub.Init(state.update, 10)
     pub = loco = None; switched = restore_ok = False; final_id = -1
-    controls = {}; samples = []; clamp_active = {i: False for i in LEFT_ARM_INDICES}
-    max_g = {i: 0.0 for i in LEFT_ARM_INDICES}; max_ff = max_g.copy(); max_est = max_g.copy()
+    controls = {}; samples = []; clamp_active = {i: False for i in selected_indices}
+    max_g = {i: 0.0 for i in selected_indices}; max_ff = max_g.copy(); max_est = max_g.copy()
     logger.info("STATE = WAIT_LOWSTATE")
     try:
         while state.snapshot()[0] is None and not stop.is_set(): time.sleep(0.01)
@@ -216,11 +224,11 @@ def main():
         if msg is None or time.monotonic() - received > args.timeout:
             raise RuntimeError("invalid or stale LowState")
         q, dq, tau_est = full_state(msg)
-        for i in LEFT_ARM_INDICES:
+        for i in selected_indices:
             lo, hi = ARM_LIMITS[i]
             if not lo <= q[i] <= hi:
                 raise RuntimeError(f"initial joint position outside limit: {G1_29DOF_JOINT_NAMES[i]}")
-            config = JOINT_CONFIG[G1_29DOF_JOINT_NAMES[i]]
+            config = selected_config[G1_29DOF_JOINT_NAMES[i]]
             controls[i] = {"q_target": q[i], "state": "TEACH_IDLE",
                            "candidate_since": None, "reentry_since": None,
                            "follower_enabled": False,
@@ -229,7 +237,7 @@ def main():
                            "tau_gravity": 0.0}
 
         pin_tau = gravity.full_torque(q); mj_tau = reference.full_torque(q)
-        for name, config in JOINT_CONFIG.items():
+        for name, config in selected_config.items():
             i = JOINT_TO_INDEX[name]
             enabled, scale = config["gravity_enabled"], config["gravity_scale"]
             if not enabled: continue
@@ -243,7 +251,7 @@ def main():
         loco = LocoClient(); loco.Init(); code, fsm_id = loco.GetFsmId()
         if code != 0 or fsm_id != 1:
             raise RuntimeError(f"robot must be PASSIVE/DAMPING (fsm={fsm_name(fsm_id)})")
-        try: confirmed = input("Type YES to enable LEFT ARM TEACH: ") == "YES"
+        try: confirmed = input(f"Type YES to enable {args.arm.upper()} ARM TEACH: ") == "YES"
         except (EOFError, KeyboardInterrupt): confirmed = False
         if not confirmed: raise RuntimeError("operator did not confirm")
         pub = ChannelPublisher("rt/user_lowcmd", LowCmd_); pub.Init()
@@ -260,7 +268,7 @@ def main():
             q, dq, tau_est = full_state(msg)
             tau_full = gravity.full_torque(q)  # exactly one dynamics call per cycle
             tau_cmd = {}; log_parts = []
-            for i in LEFT_ARM_INDICES:
+            for i in selected_indices:
                 name = G1_29DOF_JOINT_NAMES[i]; control = controls[i]
                 previous_target = control["q_target"]
                 update_teach_state(control, dq[i], now, args)
@@ -284,19 +292,19 @@ def main():
                     logger.warning(f"GRAVITY_TAU_CLAMP joint={name} raw={raw:.6f} scaled={scaled:.6f} limit={args.gravity_tau_limit:.6f}")
                 clamp_active[i] = clamped; tau_cmd[i] = command
                 max_g[i] = max(max_g[i], abs(raw)); max_ff[i] = max(max_ff[i], abs(command)); max_est[i] = max(max_est[i], abs(tau_est[i]))
-                config = JOINT_CONFIG[name]
+                config = selected_config[name]
                 log_parts.append(f"{name}:q_actual={q[i]:.5f},q_target={control['q_target']:.5f},dq={dq[i]:.5f},tau_est={tau_est[i]:.5f},kp={config['kp']:.2f},kd={config['kd']:.2f},state={control['state']},gravity_enabled={'YES' if enabled else 'NO'},gravity_scale={scale:.2f},tau_gravity_raw={raw:.5f},tau_ff_command={command:.5f}")
             timestamp = time.time(); logger.debug(f"timestamp={timestamp:.6f} " + " | ".join(log_parts))
             if cycle % max(1, int(args.rate / 2)) == 0:
-                logger.info("LEFT_ARM_TEACH " + " | ".join(log_parts))
-            pub.Write(make_arm_command(msg, {i: controls[i]["q_target"] for i in LEFT_ARM_INDICES}, tau_cmd))
+                logger.info(f"{args.arm.upper()}_ARM_TEACH " + " | ".join(log_parts))
+            pub.Write(make_arm_command(msg, {i: controls[i]["q_target"] for i in selected_indices}, tau_cmd, selected_config))
             cycle += 1; time.sleep(max(0.0, period - (time.monotonic() - started)))
     except KeyboardInterrupt:
         pass
     except Exception as exc:
         logger.error(f"SAFE_EXIT_REASON={type(exc).__name__}: {exc}")
     finally:
-        logger.info("STATE = CONTROLLED_STOP ALL_LEFT_ARM_TAU=0")
+        logger.info(f"STATE = CONTROLLED_STOP ALL_{args.arm.upper()}_ARM_TAU=0")
         try:
             msg = state.snapshot()[0]
             if pub is not None and msg is not None: pub.Write(make_ownership_command(msg, STOP_DAMPING_KD))
@@ -314,20 +322,20 @@ def main():
                 except Exception: pass
                 time.sleep(0.05)
         safe_exit = restore_ok and final_id == 1
-        summary = {"scope": "left_arm_15_21", "base_orientation_assumed_level": True,
-                   "gravity_backend": "PINOCCHIO_URDF", "joint_config": JOINT_CONFIG,
+        summary = {"scope": f"{args.arm}_arm", "arm_mode": args.arm, "base_orientation_assumed_level": True,
+                   "gravity_backend": "PINOCCHIO_URDF", "joint_config": selected_config,
                    "max_abs_tau_gravity_per_joint": {}, "max_abs_tau_ff_per_joint": {},
                    "max_abs_tau_est_per_joint": {}, "safe_exit_to_passive": safe_exit}
         logger.result("TEACH_KP_PER_JOINT=" + json.dumps(
-            {name: config["kp"] for name, config in JOINT_CONFIG.items()}, sort_keys=True))
+            {name: config["kp"] for name, config in selected_config.items()}, sort_keys=True))
         logger.result("TEACH_KD_PER_JOINT=" + json.dumps(
-            {name: config["kd"] for name, config in JOINT_CONFIG.items()}, sort_keys=True))
-        for i in LEFT_ARM_INDICES:
+            {name: config["kd"] for name, config in selected_config.items()}, sort_keys=True))
+        for i in selected_indices:
             name = G1_29DOF_JOINT_NAMES[i]
             summary["max_abs_tau_gravity_per_joint"][name] = max_g[i]
             summary["max_abs_tau_ff_per_joint"][name] = max_ff[i]
             summary["max_abs_tau_est_per_joint"][name] = max_est[i]
-            config = JOINT_CONFIG[name]
+            config = selected_config[name]
             logger.result(f"JOINT={name} TEACH_KP={config['kp']:.3f} TEACH_KD={config['kd']:.3f} MAX_ABS_TAU_GRAVITY={max_g[i]:.6f} MAX_ABS_TAU_FF={max_ff[i]:.6f} MAX_ABS_TAU_EST={max_est[i]:.6f}")
         logger.result(f"LEFT_ARM_MANUALLY_MOVABLE=OPERATOR\nLEFT_ARM_NOTICEABLE_RESISTANCE=OPERATOR\nWRIST_MANUALLY_MOVABLE=OPERATOR\nWRIST_DRAG_RESISTANCE_COMFORTABLE=OPERATOR\nNO_WRIST_OSCILLATION=OPERATOR\nLEFT_ARM_MULTI_JOINT_TEACH_FEEL=OPERATOR\nSHOULDER_PITCH_NO_FREE_FALL=OPERATOR\nSHOULDER_ROLL_NO_FREE_FALL=OPERATOR\nSHOULDER_YAW_NO_FREE_FALL=OPERATOR\nSHOULDER_YAW_GRAVITY_FEELS_NEUTRAL=OPERATOR\nELBOW_NO_FREE_FALL=OPERATOR\nNO_ARM_OSCILLATION=OPERATOR\nSAFE_EXIT_TO_PASSIVE={'YES' if safe_exit else 'NO'}\nLEFT_ARM_MULTI_JOINT_TEACH_READY=YES")
         logger.json_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
